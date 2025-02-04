@@ -1,14 +1,9 @@
 const express = require("express");
 const bodyParser = require("body-parser");
 const db = require("../models");
-const crypto = require("crypto"); // Required for VNPay signature generation
+const { VNPay, ignoreLogger, ProductCode, VnpLocale, dateFormat } = require("vnpay");
 
 const OrderRouter = express.Router();
-
-// VNPay Configuration
-const vnpUrl = "https://sandbox.vnpayment.vn/paymentv2/vpcpay.html"; // VNPay sandbox URL
-const vnpTmnCode = "9TKDVWYK"; // Your Merchant ID from VNPay
-const vnpHashSecret = "LH6SD44ECTBWU1PHK3D2YCOI5HLUWGPH"; // Your Hash Secret from VNPay
 
 OrderRouter.post("/create", async (req, res, next) => {
   try {
@@ -56,45 +51,33 @@ OrderRouter.post("/create", async (req, res, next) => {
       status: "Pending",
     });
 
+    const vnpay = new VNPay({
+      tmnCode: "9TKDVWYK",
+      secureSecret: "LH6SD44ECTBWU1PHK3D2YCOI5HLUWGPH",
+      vnpayHost: "https://sandbox.vnpayment.vn",
+      testMode: true, // tùy chọn
+      hashAlgorithm: "SHA512", // tùy chọn
+      enableLog: true, // tùy chọn
+      loggerFn: ignoreLogger, // tùy chọn
+    });
+
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const vnpayResponse = await vnpay.createPayment({
+      vnpAmount: newOrder.totalAmount,
+      vnp_IpAddr: "127.0.0.1",
+      vnp_TxnRef: newOrder._id,
+      vnp_OrderInfo: `${newOrder._id}`,
+      vnp_OrderType: ProductCode.Other,
+      vnp_ReturnUrl: "https://www.youtube.com/watch?v=XdO7YQchnlI",
+      vnp_Locale: VnpLocale.VN,
+      vnp_CreatedDate: dateFormat(new Date()),
+      vnp_ExpireDate: dateFormat(tomorrow),
+    });
+
     await newOrder.save();
 
-    // Prepare VNPay payment parameters
-    const vnpParams = {
-      vnp_Version: "2.0.0",
-      vnp_TmnCode: vnpTmnCode,
-      vnp_Amount: totalAmount * 100, // Amount in the smallest unit (VND is in "dong")
-      vnp_OrderInfo: `Order #${newOrder._id}`,
-      vnp_OrderType: "billpayment",
-      vnp_TxnRef: newOrder._id.toString(),
-      vnp_ReturnUrl: "http://localhost:5000/payment/return", // Replace with your return URL
-      vnp_IpAddr: req.ip,
-      vnp_CreateDate: new Date().toISOString().replace(/T/, " ").replace(/\..+/, ""),
-    };
-
-    // Generate the secure hash
-    const queryString = Object.keys(vnpParams)
-      .sort()
-      .map((key) => {
-        return key + "=" + encodeURIComponent(vnpParams[key]);
-      })
-      .join("&");
-
-    const signData =
-      queryString +
-      `&vnp_SecureHashType=SHA256&vnp_SecureHash=${crypto
-        .createHmac("sha256", vnpHashSecret)
-        .update(queryString)
-        .digest("hex")}`;
-
-    // Send request to VNPay to get payment link
-    const paymentUrl = `${vnpUrl}?${signData}`;
-
-    // Respond to user with the payment URL
-    res.status(201).json({
-      message: "Order created successfully. Please complete the payment.",
-      order: newOrder,
-      paymentUrl: paymentUrl,
-    });
+    res.status(201).json({ message: "Order created successfully.", vnpay_url: vnpayResponse });
   } catch (error) {
     res.status(500).json({ message: "Server error.", error: error.message });
   }
